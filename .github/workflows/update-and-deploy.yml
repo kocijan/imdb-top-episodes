@@ -1,0 +1,69 @@
+name: Update top episodes and deploy
+
+on:
+  schedule:
+    - cron: "0 4 * * *"   # every day at 04:00 UTC
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build top episodes JSON
+        env:
+          MIN_VOTES: "1000"
+          TOP_N: "250"
+          OUTPUT_PATH: "data/top_episodes.json"
+        run: python scraper/fetch_top_episodes.py
+
+      - name: Copy data into site folder
+        run: cp data/top_episodes.json site/top_episodes.json
+
+      - name: Commit updated data (if changed)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/top_episodes.json site/top_episodes.json
+          git diff --quiet --cached || git commit -m "chore: refresh top episodes data [skip ci]"
+          git push
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: "site"
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
