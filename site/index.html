@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Absolute Cinema TV Episodes</title>
+<style>
+  :root {
+    --bg: #0e0f11;
+    --panel: #17181b;
+    --text: #eaeaea;
+    --muted: #9a9a9a;
+    --accent: #f5c518; /* IMDb yellow */
+    --border: #2a2b2e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    padding: 28px 20px 16px;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 {
+    margin: 0 0 4px;
+    font-size: 1.9rem;
+    letter-spacing: 0.5px;
+  }
+  header h1 span { color: var(--accent); }
+  header p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.95rem;
+  }
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 16px 20px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  .controls input, .controls select {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 0.9rem;
+  }
+  .controls input[type="text"] { flex: 1; min-width: 200px; }
+  table {
+    width: 100%;
+    max-width: 1200px;
+    margin: 0 auto 40px;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+  }
+  th, td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    vertical-align: middle;
+  }
+  th {
+    cursor: pointer;
+    color: var(--muted);
+    background: var(--panel);
+    position: sticky;
+    top: 0;
+    user-select: none;
+    white-space: nowrap;
+  }
+  th:hover { color: var(--accent); }
+  tr:hover td { background: #1c1d20; }
+  .rank { color: var(--muted); width: 40px; }
+  .rating { color: var(--accent); font-weight: 700; }
+  .poster {
+    width: 46px;
+    height: 68px;
+    object-fit: cover;
+    border-radius: 4px;
+    display: block;
+  }
+  a { color: var(--text); text-decoration: none; }
+  a:hover { text-decoration: underline; color: var(--accent); }
+  .series-title { color: var(--muted); font-size: 0.82rem; }
+  footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.8rem;
+    padding: 20px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Absolute <span>Cinema</span> TV Episodes</h1>
+  <p>Top episodes of TV according to IMDb &mdash; sortable, filterable, auto-updated daily</p>
+</header>
+
+<div class="controls">
+  <input type="text" id="search" placeholder="Filter by episode or series title..." />
+  <select id="minVotes">
+    <option value="0">Min votes: any</option>
+    <option value="1000" selected>Min votes: 1,000+</option>
+    <option value="5000">Min votes: 5,000+</option>
+    <option value="20000">Min votes: 20,000+</option>
+    <option value="50000">Min votes: 50,000+</option>
+  </select>
+</div>
+
+<table id="epTable">
+  <thead>
+    <tr>
+      <th data-key="rank">#</th>
+      <th></th>
+      <th data-key="episode_title">Episode</th>
+      <th data-key="series_title">Series</th>
+      <th data-key="season_number">S/E</th>
+      <th data-key="rating">Rating</th>
+      <th data-key="votes">Votes</th>
+      <th data-key="year">Year</th>
+      <th data-key="watch_to_here_seconds">Watch to Here</th>
+      <th data-key="total_binge_seconds">Total Binge</th>
+    </tr>
+  </thead>
+  <tbody id="epBody"></tbody>
+</table>
+
+<footer>
+  Data sourced from IMDb non-commercial datasets (datasets.imdbws.com). Not affiliated with or endorsed by IMDb.
+  Refreshed automatically via GitHub Actions.
+</footer>
+
+<script>
+let episodes = [];
+let sortKey = "rating";
+let sortDir = -1;
+
+function fmtHours(seconds) {
+  if (!seconds || seconds <= 0) return "\u2014";
+  const h = seconds / 3600;
+  return h.toFixed(1) + " h";
+}
+
+function render() {
+  const q = document.getElementById("search").value.toLowerCase();
+  const minVotes = parseInt(document.getElementById("minVotes").value, 10);
+
+  let rows = episodes.filter(e =>
+    e.votes >= minVotes &&
+    ((e.episode_title || "").toLowerCase().includes(q) ||
+     (e.series_title || "").toLowerCase().includes(q))
+  );
+
+  rows.sort((a, b) => {
+    let av = a[sortKey], bv = b[sortKey];
+    if (typeof av === "string") { av = av || ""; bv = bv || ""; return sortDir * av.localeCompare(bv); }
+    av = av || 0; bv = bv || 0;
+    return sortDir * (av - bv);
+  });
+
+  const tbody = document.getElementById("epBody");
+  tbody.innerHTML = rows.map((e, i) => `
+    <tr>
+      <td class="rank">${i + 1}</td>
+      <td><img class="poster" src="${e.image_url || ''}" alt="" loading="lazy" onerror="this.style.display='none'"/></td>
+      <td><a href="${e.imdb_url || ('https://www.imdb.com/title/' + e.episode_id + '/')}" target="_blank" rel="noopener">${e.episode_title || "Untitled"}</a></td>
+      <td class="series-title"><a href="${e.series_imdb_url || ('https://www.imdb.com/title/' + e.series_id + '/')}" target="_blank" rel="noopener">${e.series_title || ""}</a></td>
+      <td>S${e.season_number ?? "?"}E${e.episode_number ?? "?"}</td>
+      <td class="rating">${e.rating?.toFixed(1) ?? "\u2014"}</td>
+      <td>${(e.votes || 0).toLocaleString()}</td>
+      <td>${e.year ?? "\u2014"}</td>
+      <td>${fmtHours(e.watch_to_here_seconds)}</td>
+      <td>${fmtHours(e.total_binge_seconds)}</td>
+    </tr>
+  `).join("");
+}
+
+document.querySelectorAll("th[data-key]").forEach(th => {
+  th.addEventListener("click", () => {
+    const key = th.dataset.key;
+    if (key === "rank") return;
+    if (sortKey === key) sortDir *= -1;
+    else { sortKey = key; sortDir = key === "rating" ? -1 : -1; }
+    render();
+  });
+});
+
+document.getElementById("search").addEventListener("input", render);
+document.getElementById("minVotes").addEventListener("change", render);
+
+fetch("top_episodes.json")
+  .then(r => r.json())
+  .then(data => { episodes = data.episodes || []; render(); })
+  .catch(err => {
+    document.getElementById("epBody").innerHTML =
+      `<tr><td colspan="10">Failed to load data: ${err}</td></tr>`;
+  });
+</script>
+
+</body>
+</html>
