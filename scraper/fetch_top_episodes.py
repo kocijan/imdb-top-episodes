@@ -1,23 +1,24 @@
 """
 Absolute Cinema TV Episodes - data builder.
 
-Builds a leaderboard of the highest-rated TV episodes (by IMDb user rating,
-filtered by a minimum vote count) using IMDb's official, free, daily-updated
-non-commercial datasets:
+Primary path: IMDb's unofficial internal GraphQL API (api.graphql.imdb.com),
+the same endpoint imdb.com's own "Advanced Title Search" page
+(https://www.imdb.com/search/title/?title_type=tv_episode&num_votes=1000,&sort=user_rating,desc)
+calls in the browser. It requires no API key/auth and supports cursor-based
+pagination up to 250 items per page via `advancedTitleSearch`.
 
-    https://datasets.imdbws.com/title.basics.tsv.gz
-    https://datasets.imdbws.com/title.ratings.tsv.gz
-    https://datasets.imdbws.com/title.episode.tsv.gz
-
-This avoids scraping IMDb's website entirely and stays within IMDb's terms
-for non-commercial use (see https://developer.imdb.com/non-commercial-datasets/).
+This is UNDOCUMENTED and may break or get rate-limited without notice, so
+this script falls back automatically to IMDb's official, free,
+non-commercial dataset dumps (datasets.imdbws.com) if the GraphQL calls
+fail after retries. See README.md for details and IMDb's non-commercial
+data terms: https://help.imdb.com/article/imdb/general-information/can-i-use-imdb-data-in-my-software/G5JTRESSHJBBHTGX
 
 For each qualifying episode we also compute:
   - total_binge_seconds: sum of runtimes for ALL episodes of the parent
     series (i.e. how long it takes to watch the entire show).
   - watch_to_here_seconds: sum of runtimes from S01E01 up to and including
-    this episode (in air/season order), i.e. how long it takes to reach
-    this episode from the start of the show.
+    this episode (in season/episode order), i.e. how long it takes to
+    reach this episode from the start of the show.
 
 Output: data/top_episodes.json
 """
@@ -26,29 +27,189 @@ import io
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 
 import requests
-import pandas as pd
 
+GRAPHQL_URL = "https://api.graphql.imdb.com/"
 DATASETS_BASE = "https://datasets.imdbws.com"
 MIN_VOTES = int(os.environ.get("MIN_VOTES", "1000"))
 TOP_N = int(os.environ.get("TOP_N", "250"))
 OUTPUT_PATH = os.environ.get("OUTPUT_PATH", "data/top_episodes.json")
 
+HEADERS = {
+    "Content-Type": "application/json",
+    "User-Agent": "Mozilla/5.0 (compatible; AbsoluteCinemaTV/1.0; +https://github.com/kocijan/imdb-top-episodes)",
+}
 
-def download_tsv(name: str) -> pd.DataFrame:
+TOP_EPISODES_QUERY = """
+query TopEpisodes($first: Int!, $after: String, $minVotes: Int!) {
+  advancedTitleSearch(
+    first: $first
+    after: $after
+    constraints: {
+      titleTypeConstraint: { anyTitleTypeIds: ["tvEpisode"] }
+      userRatingsConstraint: { ratingsCountRange: { min: $minVotes } }
+    }
+    sort: { sortBy: USER_RATING, sortOrder: DESC }
+  ) {
+    total
+    pageInfo { hasNextPage endCursor }
+    edges {
+      node {
+        title {
+          id
+          titleText { text }
+          releaseYear { year }
+          runtime { seconds }
+          ratingsSummary { aggregateRating voteCount }
+          series {
+            series { id titleText { text } }
+            episodeNumber { episodeNumber seasonNumber }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+SERIES_EPISODES_QUERY = """
+query SeriesEpisodes($id: ID!, $first: Int!, $after: ID) {
+  title(id: $id) {
+    episodes {
+      episodes(first: $first, after: $after) {
+        total
+        pageInfo { hasNextPage endCursor }
+        edges {
+          node {
+            id
+            runtime { seconds }
+            series { episodeNumber { episodeNumber seasonNumber } }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def gql(query, variables, max_retries=4):
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            resp = requests.post(
+                GRAPHQL_URL,
+                headers=HEADERS,
+                json={"query": query, "variables": variables},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            if "errors" in body and not body.get("data"):
+                raise RuntimeError(f"GraphQL errors: {body['errors']}")
+            return body["data"]
+        except Exception as e:
+            last_err = e
+            print(f"  GraphQL attempt {attempt + 1} failed: {e}", file=sys.stderr)
+            time.sleep(1.5 * (attempt + 1))
+    raise RuntimeError(f"GraphQL request failed after {max_retries} attempts: {last_err}")
+
+
+def fetch_top_episodes_via_graphql(min_votes: int, top_n: int):
+    episodes = []
+    after = None
+    while len(episodes) < top_n:
+        page_size = min(250, top_n - len(episodes))
+        data = gql(
+            TOP_EPISODES_QUERY,
+            {"first": page_size, "after": after, "minVotes": min_votes},
+        )
+        result = data["advancedTitleSearch"]
+        for edge in result["edges"]:
+            node = edge["node"]["title"]
+            series = node.get("series") or {}
+            series_title_obj = series.get("series") or {}
+            ep_num_obj = series.get("episodeNumber") or {}
+            rating_obj = node.get("ratingsSummary") or {}
+            runtime_obj = node.get("runtime") or {}
+            year_obj = node.get("releaseYear") or {}
+
+            episodes.append(
+                {
+                    "episode_id": node["id"],
+                    "episode_title": (node.get("titleText") or {}).get("text"),
+                    "year": year_obj.get("year"),
+                    "runtime_seconds": runtime_obj.get("seconds"),
+                    "rating": rating_obj.get("aggregateRating"),
+                    "votes": rating_obj.get("voteCount"),
+                    "series_id": series_title_obj.get("id"),
+                    "series_title": (series_title_obj.get("titleText") or {}).get("text"),
+                    "season_number": ep_num_obj.get("seasonNumber"),
+                    "episode_number": ep_num_obj.get("episodeNumber"),
+                }
+            )
+        page_info = result["pageInfo"]
+        if not page_info["hasNextPage"]:
+            break
+        after = page_info["endCursor"]
+        time.sleep(0.4)
+    return episodes[:top_n]
+
+
+def fetch_series_runtimes_via_graphql(series_id: str):
+    """Returns list of (season, episode_number, runtime_seconds) for every
+    episode of a series, using the GraphQL API."""
+    all_eps = []
+    after = None
+    while True:
+        data = gql(
+            SERIES_EPISODES_QUERY,
+            {"id": series_id, "first": 100, "after": after},
+        )
+        title = data.get("title")
+        if not title or not title.get("episodes"):
+            break
+        conn = title["episodes"]["episodes"]
+        for edge in conn["edges"]:
+            node = edge["node"]
+            ep_num_obj = (node.get("series") or {}).get("episodeNumber") or {}
+            runtime_obj = node.get("runtime") or {}
+            all_eps.append(
+                {
+                    "episode_id": node["id"],
+                    "season_number": ep_num_obj.get("seasonNumber"),
+                    "episode_number": ep_num_obj.get("episodeNumber"),
+                    "runtime_seconds": runtime_obj.get("seconds"),
+                }
+            )
+        page_info = conn["pageInfo"]
+        if not page_info["hasNextPage"]:
+            break
+        after = page_info["endCursor"]
+        time.sleep(0.3)
+    return all_eps
+
+
+def download_tsv(name: str):
+    import pandas as pd
+
     url = f"{DATASETS_BASE}/{name}"
-    print(f"Downloading {url} ...", file=sys.stderr)
+    print(f"[fallback] Downloading {url} ...", file=sys.stderr)
     resp = requests.get(url, timeout=180)
     resp.raise_for_status()
     with gzip.GzipFile(fileobj=io.BytesIO(resp.content)) as gz:
         df = pd.read_csv(gz, sep="\t", low_memory=False, na_values=["\\N"])
-    print(f"  -> {len(df):,} rows", file=sys.stderr)
     return df
 
 
-def main():
+def fetch_via_dataset_fallback(min_votes: int, top_n: int):
+    """Fallback path using IMDb's official non-commercial dataset dumps.
+    Used only if the GraphQL API is unavailable."""
+    import pandas as pd
+
     basics = download_tsv("title.basics.tsv.gz")
     ratings = download_tsv("title.ratings.tsv.gz")
     episode = download_tsv("title.episode.tsv.gz")
@@ -56,96 +217,137 @@ def main():
     episodes = basics[basics["titleType"] == "tvEpisode"].copy()
     episodes = episodes.merge(episode, on="tconst", how="inner")
     episodes = episodes.merge(ratings, on="tconst", how="inner")
-
     episodes["numVotes"] = pd.to_numeric(episodes["numVotes"], errors="coerce")
-    episodes = episodes[episodes["numVotes"] >= MIN_VOTES]
+    episodes = episodes[episodes["numVotes"] >= min_votes]
 
     series_ids = episodes["parentTconst"].unique().tolist()
     series_info = basics[basics["tconst"].isin(series_ids)][
-        ["tconst", "primaryTitle", "runtimeMinutes"]
+        ["tconst", "primaryTitle"]
     ].rename(columns={"tconst": "parentTconst", "primaryTitle": "seriesTitle"})
-
-    all_eps_for_series = basics[basics["titleType"] == "tvEpisode"].merge(
-        episode, on="tconst", how="inner"
-    )
-    all_eps_for_series = all_eps_for_series[
-        all_eps_for_series["parentTconst"].isin(series_ids)
-    ][["tconst", "parentTconst", "seasonNumber", "episodeNumber", "runtimeMinutes"]]
-
-    all_eps_for_series["runtimeMinutes"] = pd.to_numeric(
-        all_eps_for_series["runtimeMinutes"], errors="coerce"
-    ).fillna(0)
-    all_eps_for_series["seasonNumber"] = pd.to_numeric(
-        all_eps_for_series["seasonNumber"], errors="coerce"
-    )
-    all_eps_for_series["episodeNumber"] = pd.to_numeric(
-        all_eps_for_series["episodeNumber"], errors="coerce"
-    )
-
-    total_binge = (
-        all_eps_for_series.groupby("parentTconst")["runtimeMinutes"].sum().to_dict()
-    )
-
-    all_eps_sorted = all_eps_for_series.sort_values(
-        ["parentTconst", "seasonNumber", "episodeNumber"]
-    )
-    all_eps_sorted["cum_runtime"] = all_eps_sorted.groupby("parentTconst")[
-        "runtimeMinutes"
-    ].cumsum()
-    watch_to_here_map = dict(
-        zip(all_eps_sorted["tconst"], all_eps_sorted["cum_runtime"])
-    )
 
     episodes = episodes.merge(series_info, on="parentTconst", how="left")
     episodes["averageRating"] = pd.to_numeric(episodes["averageRating"], errors="coerce")
     episodes = episodes.sort_values(
         ["averageRating", "numVotes"], ascending=[False, False]
-    ).head(TOP_N)
+    ).head(top_n)
 
-    records = []
+    results = []
     for _, row in episodes.iterrows():
-        tconst = row["tconst"]
-        parent = row["parentTconst"]
-        year = row.get("startYear")
-        year = int(year) if pd.notna(year) else None
         runtime_min = row.get("runtimeMinutes")
-        runtime_seconds = (
-            int(float(runtime_min) * 60) if pd.notna(runtime_min) else None
-        )
-        season_num = row.get("seasonNumber")
-        ep_num = row.get("episodeNumber")
-
-        records.append(
+        results.append(
             {
-                "episode_id": tconst,
+                "episode_id": row["tconst"],
                 "episode_title": row.get("primaryTitle"),
-                "year": year,
-                "runtime_seconds": runtime_seconds,
+                "year": int(row["startYear"]) if pd.notna(row.get("startYear")) else None,
+                "runtime_seconds": int(float(runtime_min) * 60) if pd.notna(runtime_min) else None,
                 "rating": float(row["averageRating"]),
                 "votes": int(row["numVotes"]),
-                "series_id": parent,
+                "series_id": row["parentTconst"],
                 "series_title": row.get("seriesTitle"),
-                "season_number": int(season_num) if pd.notna(season_num) else None,
-                "episode_number": int(ep_num) if pd.notna(ep_num) else None,
-                "total_binge_seconds": float(total_binge.get(parent, 0) * 60),
-                "watch_to_here_seconds": float(watch_to_here_map.get(tconst, 0) * 60),
-                "imdb_url": f"https://www.imdb.com/title/{tconst}/",
-                "series_imdb_url": f"https://www.imdb.com/title/{parent}/",
+                "season_number": int(row["seasonNumber"]) if pd.notna(row.get("seasonNumber")) else None,
+                "episode_number": int(row["episodeNumber"]) if pd.notna(row.get("episodeNumber")) else None,
             }
         )
+    return results
+
+
+def compute_binge_times(episodes):
+    """Given the flat list of top episodes, fetch each parent series' full
+    episode list (GraphQL) and compute total_binge_seconds and
+    watch_to_here_seconds for every episode."""
+    series_ids = sorted({e["series_id"] for e in episodes if e.get("series_id")})
+    series_runtime_cache = {}
+
+    for i, sid in enumerate(series_ids):
+        try:
+            eps = fetch_series_runtimes_via_graphql(sid)
+        except Exception as e:
+            print(f"  Failed to fetch episodes for series {sid}: {e}", file=sys.stderr)
+            eps = []
+        series_runtime_cache[sid] = eps
+        print(f"  [{i + 1}/{len(series_ids)}] {sid}: {len(eps)} episodes", file=sys.stderr)
+        time.sleep(0.2)
+
+    for ep in episodes:
+        sid = ep.get("series_id")
+        series_eps = series_runtime_cache.get(sid, [])
+        if not series_eps:
+            ep["total_binge_seconds"] = None
+            ep["watch_to_here_seconds"] = None
+            continue
+
+        runtimes = [se.get("runtime_seconds") for se in series_eps if se.get("runtime_seconds")]
+        avg_runtime = (sum(runtimes) / len(runtimes)) if runtimes else (ep.get("runtime_seconds") or 0)
+
+        total = 0
+        for se in series_eps:
+            total += se.get("runtime_seconds") or avg_runtime
+        ep["total_binge_seconds"] = float(total)
+
+        def sort_key(se):
+            s = se.get("season_number")
+            e = se.get("episode_number")
+            return (s if s is not None else 9999, e if e is not None else 9999)
+
+        ordered = sorted(series_eps, key=sort_key)
+        cumulative = 0.0
+        watch_to_here = None
+        for se in ordered:
+            cumulative += se.get("runtime_seconds") or avg_runtime
+            if se["episode_id"] == ep["episode_id"]:
+                watch_to_here = cumulative
+                break
+        ep["watch_to_here_seconds"] = watch_to_here if watch_to_here is not None else ep.get("runtime_seconds")
+
+    return episodes
+
+
+def main():
+    used_fallback = False
+    try:
+        print(f"Fetching top {TOP_N} episodes (min {MIN_VOTES} votes) via GraphQL...", file=sys.stderr)
+        episodes = fetch_top_episodes_via_graphql(MIN_VOTES, TOP_N)
+        if not episodes:
+            raise RuntimeError("GraphQL returned zero episodes")
+    except Exception as e:
+        print(f"GraphQL primary path failed: {e}", file=sys.stderr)
+        print("Falling back to IMDb non-commercial dataset dumps...", file=sys.stderr)
+        episodes = fetch_via_dataset_fallback(MIN_VOTES, TOP_N)
+        used_fallback = True
+
+    if not episodes:
+        print("ERROR: no episodes fetched from either source, aborting.", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Computing binge-watch times for {len(episodes)} episodes...", file=sys.stderr)
+    if not used_fallback:
+        episodes = compute_binge_times(episodes)
+    else:
+        for ep in episodes:
+            ep["total_binge_seconds"] = None
+            ep["watch_to_here_seconds"] = None
+
+    for ep in episodes:
+        ep["imdb_url"] = f"https://www.imdb.com/title/{ep['episode_id']}/"
+        ep["series_imdb_url"] = (
+            f"https://www.imdb.com/title/{ep['series_id']}/" if ep.get("series_id") else None
+        )
+
+    episodes.sort(key=lambda e: (-(e["rating"] or 0), -(e["votes"] or 0)))
 
     out = {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "min_votes": MIN_VOTES,
-        "count": len(records),
-        "episodes": records,
+        "count": len(episodes),
+        "source": "dataset_fallback" if used_fallback else "graphql",
+        "episodes": episodes,
     }
 
-    os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
+    os.makedirs(os.path.dirname(OUTPUT_PATH) or ".", exist_ok=True)
     with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
 
-    print(f"Wrote {len(records)} episodes to {OUTPUT_PATH}", file=sys.stderr)
+    print(f"Wrote {len(episodes)} episodes to {OUTPUT_PATH} (source={out['source']})", file=sys.stderr)
 
 
 if __name__ == "__main__":
