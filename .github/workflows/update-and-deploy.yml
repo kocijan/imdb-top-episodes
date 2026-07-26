@@ -38,8 +38,13 @@ jobs:
           OUTPUT_PATH: "data/top_episodes.json"
         run: python scraper/fetch_top_episodes.py
 
+      - name: Verify data was generated
+        run: test -f data/top_episodes.json
+
       - name: Copy data into site folder
-        run: cp data/top_episodes.json site/top_episodes.json
+        run: |
+          mkdir -p site
+          cp data/top_episodes.json site/top_episodes.json
 
       - name: Commit updated data (if changed)
         run: |
