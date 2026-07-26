@@ -22,6 +22,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -51,8 +53,18 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/top_episodes.json site/top_episodes.json
-          git diff --quiet --cached || git commit -m "chore: refresh top episodes data [skip ci]"
-          git push
+
+          # Exit early if nothing changed
+          if git diff --quiet --cached; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "chore: refresh top episodes data [skip ci]"
+
+          # Rebase on latest main to avoid non-fast-forward push failures
+          git pull --rebase origin main
+          git push origin HEAD:main
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
