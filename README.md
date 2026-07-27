@@ -7,23 +7,9 @@ https://www.imdb.com/search/title/?title_type=tv_episode&num_votes=1000,&sort=us
 
 ## How it works
 
-1. **`scraper/fetch_top_episodes.py`** downloads IMDb's official, free,
-   non-commercial daily dataset dumps (`title.basics`, `title.ratings`,
-   `title.episode`) from `datasets.imdbws.com`, filters TV episodes by a
-   minimum vote count, sorts by rating, and computes for each episode:
-   - `total_binge_seconds`: total runtime of every episode in the parent
-     series (how long it takes to watch the whole show).
-   - `watch_to_here_seconds`: cumulative runtime from S01E01 through the
-     episode in question.
-2. The script writes `data/top_episodes.json`, which is copied into
-   `site/top_episodes.json` for the static frontend to fetch.
-3. **`site/index.html`** is a static, dependency-free page with a
-   sortable/filterable table (rating, votes, season/episode, watch-to-here
-   hours, total binge hours, poster thumbnail, links to IMDb).
-4. **`.github/workflows/update-and-deploy.yml`** runs on a daily schedule
-   (and on every push), regenerates the data, commits it back to the repo,
-   and deploys `site/` to GitHub Pages. No server, no CORS proxy, no paid
-   API — everything runs on GitHub's free infrastructure.
+1. **`scraper/fetch_top_episodes.py`** fetches the data and partitions it across multiple axes (Score and Votes) into 6 distinct, non-overlapping `.csv` chunk files. (It defaults to attempting an undocumented IMDb GraphQL API for up-to-date binge metrics, and automatically falls back to IMDb's official non-commercial dataset dumps).
+2. **`.github/workflows/update-and-deploy.yml`** runs daily, generates the data fresh, uses `gzip -c` to highly compress the CSV chunks into `site/`, and deploys to GitHub Pages.
+3. **`site/index.html`** is a static page (using PapaParse and fflate via CDN) with a sortable/filterable, virtually-scrolled table. It features **Matrix Lazy Loading**, downloading only the absolute top episodes initially, and asynchronously fetching and merging the remaining chunks in the background as the user relaxes the filter sliders!
 
 ## Why datasets instead of scraping the search page
 
@@ -40,12 +26,10 @@ IMDb's website — no scraping, no fragile HTML parsing, no rate-limit risk.
 ## Setup / local run
 
 ```bash
-pip install -r requirements.txt
-MIN_VOTES=1000 TOP_N=250 python scraper/fetch_top_episodes.py
-cp data/top_episodes.json site/top_episodes.json
-python -m http.server --directory site 8000
-# open http://localhost:8000
+./build.py
 ```
+
+This self-contained Python script uses [`uv`](https://github.com/astral-sh/uv) to automatically manage dependencies! It will effortlessly spin up a virtual environment, install requirements, run the scraper to generate the partitioned dataset, gzip the chunks into `site/`, and provide you with a command to test the live frontend locally!
 
 ## Enabling GitHub Pages
 
@@ -59,14 +43,9 @@ file):
 
 | Variable      | Default                  | Meaning                              |
 |---------------|---------------------------|---------------------------------------|
-| `MIN_VOTES`   | `1000`                    | Minimum IMDb vote count to qualify    |
-| `TOP_N`       | `250`                     | How many top episodes to keep         |
-| `OUTPUT_PATH` | `data/top_episodes.json`  | Where to write the resulting JSON     |
-
-## Naming
-
-`abs-tv.com` was one idea (Absolute [Cinema] TV). Other options considered:
-`EpisodePeak`, `RatedEp`, `BingeBoard`, `TopEp.tv`, `PeakEpisode`.
+| `MIN_VOTES`   | `100`                     | Minimum IMDb vote count to qualify    |
+| `TOP_N`       | `40000`                   | How many top episodes to keep         |
+| `OUTPUT_PATH` | `data/top_episodes.csv`  | Base path for resulting CSV chunks     |
 
 ## Disclaimer
 

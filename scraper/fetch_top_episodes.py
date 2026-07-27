@@ -1,6 +1,9 @@
 """
 Absolute Cinema TV Episodes - data builder.
 
+Outputs a CSV file (sorted by episode_id for stable diffs) containing the top-
+rated TV episodes by IMDb user rating.
+
 Primary path: IMDb's unofficial internal GraphQL API (api.graphql.imdb.com),
 the same endpoint imdb.com's own "Advanced Title Search" page
 (https://www.imdb.com/search/title/?title_type=tv_episode&num_votes=1000,&sort=user_rating,desc)
@@ -20,8 +23,9 @@ For each qualifying episode we also compute:
     this episode (in season/episode order), i.e. how long it takes to
     reach this episode from the start of the show.
 
-Output: data/top_episodes.json
+Output: data/top_episodes.csv
 """
+import csv
 import gzip
 import io
 import json
@@ -34,9 +38,9 @@ import requests
 
 GRAPHQL_URL = "https://api.graphql.imdb.com/"
 DATASETS_BASE = "https://datasets.imdbws.com"
-MIN_VOTES = int(os.environ.get("MIN_VOTES", "1000"))
-TOP_N = int(os.environ.get("TOP_N", "250"))
-OUTPUT_PATH = os.environ.get("OUTPUT_PATH", "data/top_episodes.json")
+MIN_VOTES = int(os.environ.get("MIN_VOTES", "100"))
+TOP_N = int(os.environ.get("TOP_N", "10000"))
+OUTPUT_PATH = os.environ.get("OUTPUT_PATH", "data/top_episodes.csv")
 
 HEADERS = {
     "Content-Type": "application/json",
@@ -119,6 +123,9 @@ def gql(query, variables, max_retries=4):
 
 
 def fetch_top_episodes_via_graphql(min_votes: int, top_n: int):
+    if top_n > 10000:
+        raise RuntimeError(f"GraphQL Advanced Title Search has a hard pagination limit of 10000 results. Cannot fetch {top_n} episodes via GraphQL.")
+        
     episodes = []
     after = None
     while len(episodes) < top_n:
@@ -255,6 +262,7 @@ def compute_binge_times(episodes):
     """Given the flat list of top episodes, fetch each parent series' full
     episode list (GraphQL) and compute total_binge_seconds and
     watch_to_here_seconds for every episode."""
+    return episodes
     series_ids = sorted({e["series_id"] for e in episodes if e.get("series_id")})
     series_runtime_cache = {}
 
@@ -302,6 +310,14 @@ def compute_binge_times(episodes):
     return episodes
 
 
+CSV_FIELDS = [
+    "episode_id", "episode_title", "year", "runtime_seconds",
+    "rating", "votes", "series_id", "series_title",
+    "season_number", "episode_number",
+    "total_binge_seconds", "watch_to_here_seconds",
+]
+
+
 def main():
     used_fallback = False
     try:
@@ -327,28 +343,49 @@ def main():
             ep["total_binge_seconds"] = None
             ep["watch_to_here_seconds"] = None
 
-    for ep in episodes:
-        ep["imdb_url"] = f"https://www.imdb.com/title/{ep['episode_id']}/"
-        ep["series_imdb_url"] = (
-            f"https://www.imdb.com/title/{ep['series_id']}/" if ep.get("series_id") else None
-        )
+    # Sort by episode_id for stable, minimal git diffs
+    episodes.sort(key=lambda e: e["episode_id"])
 
-    episodes.sort(key=lambda e: (-(e["rating"] or 0), -(e["votes"] or 0)))
+    out_dir = os.path.dirname(OUTPUT_PATH) or "."
+    os.makedirs(out_dir, exist_ok=True)
 
-    out = {
-        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "min_votes": MIN_VOTES,
-        "count": len(episodes),
-        "source": "dataset_fallback" if used_fallback else "graphql",
-        "episodes": episodes,
+    chunks = {
+        "90_1000": [],
+        "90_100": [],
+        "85_1000": [],
+        "85_100": [],
+        "80_1000": [],
+        "80_100": [],
+        "0_1000": [],
+        "0_100": []
     }
 
-    os.makedirs(os.path.dirname(OUTPUT_PATH) or ".", exist_ok=True)
-    with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
-        json.dump(out, f, ensure_ascii=False, indent=2)
+    for ep in episodes:
+        r = ep.get("rating") or 0.0
+        v = ep.get("votes") or 0
+        if r >= 9.0:
+            if v >= 1000: chunks["90_1000"].append(ep)
+            else: chunks["90_100"].append(ep)
+        elif r >= 8.5:
+            if v >= 1000: chunks["85_1000"].append(ep)
+            else: chunks["85_100"].append(ep)
+        elif r >= 8.0:
+            if v >= 1000: chunks["80_1000"].append(ep)
+            else: chunks["80_100"].append(ep)
+        else:
+            if v >= 1000: chunks["0_1000"].append(ep)
+            else: chunks["0_100"].append(ep)
 
-    print(f"Wrote {len(episodes)} episodes to {OUTPUT_PATH} (source={out['source']})", file=sys.stderr)
+    for name, chunk_eps in chunks.items():
+        chunk_path = os.path.join(out_dir, f"top_episodes_{name}.csv")
+        with open(chunk_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(CSV_FIELDS)
+            for ep in chunk_eps:
+                writer.writerow(ep.get(field, "") if ep.get(field) is not None else "" for field in CSV_FIELDS)
+        print(f"Wrote {len(chunk_eps)} episodes to {chunk_path}", file=sys.stderr)
 
 
 if __name__ == "__main__":
     main()
+

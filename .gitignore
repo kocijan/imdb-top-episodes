@@ -1,0 +1,6 @@
+# Build artifacts (generated during CI / local build)
+site/top_episodes.json
+site/*.csv.gz
+data/*.csv
+data/top_episodes.json
+site/top_episodes.csv

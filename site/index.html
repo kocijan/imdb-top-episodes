@@ -4,96 +4,373 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Absolute Cinema TV Episodes</title>
+<meta name="description" content="Top-rated TV episodes according to IMDb — sortable, filterable, auto-updated daily." />
+<script>if(localStorage.getItem('theme')==='light')document.documentElement.classList.add('light')</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://unpkg.com/fflate@0.8.2/umd/index.js"></script>
 <style>
+  /* ── Theme: Dark (default) ── */
   :root {
     --bg: #0e0f11;
     --panel: #17181b;
     --text: #eaeaea;
     --muted: #9a9a9a;
-    --accent: #f5c518; /* IMDb yellow */
+    --accent: #f5c518;
     --border: #2a2b2e;
+    --row-hover: #1c1d20;
+    --row-alt: rgba(255,255,255,0.018);
+    --row-alt: rgba(255,255,255,0.018);
+    --grid-cols: 64px minmax(140px,3fr) minmax(110px,2fr) 76px 78px 92px 64px 104px 90px;
   }
-  * { box-sizing: border-box; }
+  /* ── Theme: Light ── */
+  :root.light {
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --text: #1c1d1f;
+    --muted: #6b6b6f;
+    --accent: #a67c00;
+    --border: #dddde0;
+    --row-hover: #ededf0;
+    --row-alt: rgba(0,0,0,0.018);
+  }
+
+  * { box-sizing: border-box; margin: 0; }
   body {
-    margin: 0;
     background: var(--bg);
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
   }
+
+  /* ── Header ── */
   header {
-    padding: 28px 20px 16px;
+    padding: 20px 16px 12px;
     text-align: center;
     border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
   }
-  header h1 {
-    margin: 0 0 4px;
-    font-size: 1.9rem;
-    letter-spacing: 0.5px;
-  }
+  header h1 { font-size: 1.8rem; letter-spacing: 0.4px; }
   header h1 span { color: var(--accent); }
-  header p {
-    margin: 0;
-    color: var(--muted);
-    font-size: 0.95rem;
+  header p { color: var(--muted); font-size: 0.9rem; margin-top: 3px; }
+  .hint-text {
+    color: var(--accent);
+    font-size: 0.8rem;
+    margin-top: 8px;
   }
+  .mobile-hint { display: none; }
+
+  /* ── Controls ── */
   .controls {
     display: flex;
     flex-wrap: wrap;
-    gap: 10px;
-    padding: 16px 20px;
-    max-width: 1200px;
+    gap: 12px;
+    padding: 10px 16px;
+    max-width: 1360px;
+    width: 100%;
     margin: 0 auto;
+    flex-shrink: 0;
+    align-items: center;
   }
-  .controls input, .controls select {
+  .controls input[type="text"], .controls select {
     background: var(--panel);
     border: 1px solid var(--border);
     color: var(--text);
-    padding: 8px 12px;
+    padding: 6px 10px;
     border-radius: 6px;
-    font-size: 0.9rem;
+    font-size: 0.88rem;
+    outline: none;
+    transition: border-color 0.2s;
   }
-  .controls input[type="text"] { flex: 1; min-width: 200px; }
-  table {
-    width: 100%;
-    max-width: 1200px;
-    margin: 0 auto 40px;
-    border-collapse: collapse;
-    font-size: 0.9rem;
+  .controls input[type="text"]:focus, .controls select:focus { border-color: var(--accent); }
+  .controls input[type="text"] { flex: 1; min-width: 140px; }
+  
+  .control-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
-  th, td {
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--border);
-    text-align: left;
-    vertical-align: middle;
-  }
-  th {
-    cursor: pointer;
+  .slider-label {
+    font-size: 0.85rem;
     color: var(--muted);
-    background: var(--panel);
-    position: sticky;
-    top: 0;
-    user-select: none;
+    min-width: 110px;
+  }
+  input[type="range"] {
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+
+  .row-count {
+    color: var(--muted);
+    font-size: 0.82rem;
+    padding: 0 2px;
     white-space: nowrap;
+    margin-left: auto;
   }
-  th:hover { color: var(--accent); }
-  tr:hover td { background: #1c1d20; }
-  .rank { color: var(--muted); width: 40px; }
-  .rating { color: var(--accent); font-weight: 700; }
-  .poster {
-    width: 46px;
-    height: 68px;
-    object-fit: cover;
-    border-radius: 4px;
-    display: block;
+  
+  .icon-btn {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    width: 34px; height: 34px;
+    font-size: 1.05rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: border-color 0.2s;
+    flex-shrink: 0;
+    padding: 0;
+    line-height: 1;
   }
+  .icon-btn:hover { border-color: var(--accent); }
+
+  /* ── Modal ── */
+  .modal-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.6);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    animation: fadeIn 0.2s;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    max-width: 400px;
+    width: 90%;
+    position: relative;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  }
+  .modal h2 { font-size: 1.3rem; margin-bottom: 12px; color: var(--text); }
+  .modal p { color: var(--muted); font-size: 0.9rem; line-height: 1.5; margin-bottom: 12px; }
+  .modal p:last-child { margin-bottom: 0; }
+  .modal a { color: var(--accent); text-decoration: none; }
+  .modal a:hover { text-decoration: underline; }
+  .modal-close {
+    position: absolute;
+    top: 12px; right: 12px;
+    background: none; border: none;
+    color: var(--muted);
+    font-size: 1.5rem;
+    cursor: pointer;
+    line-height: 1;
+  }
+  .modal-close:hover { color: var(--text); }
+
+  /* ── Main content area ── */
+  .main {
+    flex: 1;
+    max-width: 1360px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 0 16px 16px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  /* ── Grid row layout ── */
+  .vt-row {
+    display: grid;
+    grid-template-columns: var(--grid-cols);
+    align-items: center;
+    min-width: 700px;
+    border-bottom: 1px solid var(--border);
+    transition: background 0.1s;
+  }
+  .vt-cell {
+    padding: 0 8px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.88rem;
+  }
+
+  /* ── Header row ── */
+  .vt-header-wrap {
+    flex-shrink: 0;
+    overflow: hidden;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  .vt-header-scroll { overflow-x: hidden; }
+  .vt-header .vt-cell {
+    position: relative;
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 0.76rem;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    cursor: pointer;
+    user-select: none;
+    transition: color 0.15s;
+    height: 36px;
+    line-height: 36px;
+  }
+  .vt-header .vt-cell:hover { color: var(--accent); }
+  .vt-header .vt-cell.sorted { color: var(--accent); }
+  .vt-header .vt-cell .arrow { font-size: 0.65rem; margin-left: 2px; }
+
+  /* ── Column resize handles ── */
+  .rh {
+    position: absolute;
+    right: -2px; top: 0; bottom: 0;
+    width: 5px;
+    cursor: col-resize;
+    z-index: 2;
+    transition: background 0.15s;
+  }
+  .rh:hover, .rh.active { background: var(--accent); opacity: 0.45; }
+
+  /* ── Scroll body ── */
+  .vt-body {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: auto;
+    min-height: 0;
+  }
+  .vt-spacer { position: relative; width: 100%; }
+  .vt-viewport {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    will-change: transform;
+  }
+
+  /* ── Data rows ── */
+  .vt-viewport .vt-row:hover { background: var(--row-hover); }
+  .vt-viewport .vt-row.alt { background: var(--row-alt); }
+  .vt-viewport .vt-row.alt:hover { background: var(--row-hover); }
+
+  /* ── Cell styling ── */
+  .cell-rank { color: var(--muted); text-align: center; font-size: 0.8rem; }
+  .cell-rating { color: var(--accent); font-weight: 700; text-align: center; }
+  .cell-votes { text-align: right; }
+  .cell-year { text-align: center; }
+  .cell-se { text-align: center; }
+  .cell-hours { text-align: right; color: var(--muted); }
+
   a { color: var(--text); text-decoration: none; }
   a:hover { text-decoration: underline; color: var(--accent); }
-  .series-title { color: var(--muted); font-size: 0.82rem; }
-  footer {
+  .cell-series a { color: var(--muted); font-size: 0.8rem; }
+  .cell-series a:hover { color: var(--accent); }
+
+  /* ── Loading / error ── */
+  .status-msg {
     text-align: center;
     color: var(--muted);
-    font-size: 0.8rem;
-    padding: 20px;
+    padding: 60px 16px;
+    font-size: 1rem;
+  }
+  .status-msg.error { color: #e74c3c; }
+  .spinner {
+    display: inline-block;
+    width: 16px; height: 16px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    vertical-align: middle;
+    margin-right: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+  /* ─────────── Responsive: tablet ─────────── */
+  @media (max-width: 900px) {
+    .c3, .c6, .c7, .c8 { display: none !important; }
+    .vt-row { grid-template-columns: 56px 3fr 2fr 64px 82px !important; min-width: 360px !important; }
+    .rh { display: none !important; }
+    .main { padding: 0 10px 10px; }
+    .controls { padding: 10px; gap: 8px; }
+    header { padding: 16px 12px 10px; }
+    header h1 { font-size: 1.5rem; }
+    header p { font-size: 0.82rem; }
+  }
+
+  /* ─────────── Responsive: phone ─────────── */
+  @media (max-width: 540px) {
+    .vt-row.desktop-only, .vt-header-wrap { display: none !important; }
+    .vt-row.mobile {
+      grid-template-columns: 46px 1fr 50px !important;
+      min-width: 100% !important;
+      cursor: pointer;
+      user-select: none;
+    }
+    .vt-cell { line-height: 1.2; padding: 0 6px; }
+    .desktop-hint { display: none; }
+    .mobile-hint { display: block; }
+    
+    .mobile-main {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 3px;
+      padding: 6px 4px;
+    }
+    .m-series { font-size: 0.75rem; color: var(--muted); }
+    .m-ep { font-size: 0.9rem; display: flex; align-items: baseline; }
+    .m-se { 
+      display: inline-block; 
+      width: 48px; /* Fixed width prefix for alignment */
+      flex-shrink: 0; 
+      font-size: 0.75rem; 
+      color: var(--accent); 
+      font-weight: 600; 
+    }
+    .m-eptitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .mobile-expand {
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 16px;
+      font-size: 0.85rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .expand-left {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .expand-right {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .expand-btn {
+      display: inline-block;
+      padding: 8px 12px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      text-align: center;
+      font-weight: 600;
+      color: var(--text);
+      transition: border-color 0.2s;
+    }
+    .expand-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .light .mobile-expand { box-shadow: inset 0 2px 4px rgba(0,0,0,0.03); }
+    .mobile-expand a { color: var(--text); }
+    .mobile-expand a:hover { color: var(--accent); }
+
+    .main { padding: 0 6px 6px; }
+    .controls { padding: 8px 6px; gap: 8px; justify-content: center; }
+    .controls input[type="text"], .controls select { padding: 6px 8px; font-size: 0.84rem; }
+    header { padding: 14px 10px 8px; }
+    header h1 { font-size: 1.3rem; }
+    .row-count { margin-left: 0; }
   }
 </style>
 </head>
@@ -102,108 +379,478 @@
 <header>
   <h1>Absolute <span>Cinema</span> TV Episodes</h1>
   <p>Top episodes of TV according to IMDb &mdash; sortable, filterable, auto-updated daily</p>
+  <div class="hint-text desktop-hint">Column widths are adjustable by dragging between columns</div>
+  <div class="hint-text mobile-hint">Tap an episode for details</div>
 </header>
 
 <div class="controls">
-  <input type="text" id="search" placeholder="Filter by episode or series title..." />
-  <select id="minVotes">
-    <option value="0">Min votes: any</option>
-    <option value="1000" selected>Min votes: 1,000+</option>
-    <option value="5000">Min votes: 5,000+</option>
-    <option value="20000">Min votes: 20,000+</option>
-    <option value="50000">Min votes: 50,000+</option>
+  <input type="text" id="search" placeholder="Filter by title..." />
+  
+  <div class="control-group">
+    <input type="range" id="minVotesSlider" min="0" max="8" step="1" value="3">
+    <span class="slider-label" id="minVotesLabel">Min votes: 1,000+</span>
+  </div>
+
+  <select id="minScore">
+    <option value="0">Min score: any</option>
+    <option value="8.0">Min score: 8.0+</option>
+    <option value="8.5">Min score: 8.5+</option>
+    <option value="9.0" selected>Min score: 9.0+</option>
+    <option value="9.5">Min score: 9.5+</option>
   </select>
+
+  <span class="row-count" id="rowCount"></span>
+  
+  <button class="icon-btn" id="infoBtn" title="About / Info">ℹ️</button>
+  <button class="icon-btn" id="themeToggle" title="Toggle theme">&#127769;</button>
 </div>
 
-<table id="epTable">
-  <thead>
-    <tr>
-      <th data-key="rank">#</th>
-      <th></th>
-      <th data-key="episode_title">Episode</th>
-      <th data-key="series_title">Series</th>
-      <th data-key="season_number">S/E</th>
-      <th data-key="rating">Rating</th>
-      <th data-key="votes">Votes</th>
-      <th data-key="year">Year</th>
-      <th data-key="watch_to_here_seconds">Watch to Here</th>
-      <th data-key="total_binge_seconds">Total Binge</th>
-    </tr>
-  </thead>
-  <tbody id="epBody"></tbody>
-</table>
+<!-- Info Modal -->
+<div class="modal-overlay" id="infoModal">
+  <div class="modal">
+    <button class="modal-close" id="closeModal">&times;</button>
+    <h2>Absolute Cinema TV Episodes</h2>
+    <p>Data sourced from IMDb non-commercial datasets. Not affiliated with or endorsed by IMDb.<br>
+    Refreshed automatically via GitHub Actions.</p>
+    <p>Made by <a href="https://github.com/kocijan" target="_blank">Martin Josip Kocijan</a>.</p>
+    <p>Suggestions are welcome at <a href="https://github.com/kocijan/imdb-top-episodes" target="_blank">our GitHub repo</a>.</p>
+  </div>
+</div>
 
-<footer>
-  Data sourced from IMDb non-commercial datasets (datasets.imdbws.com). Not affiliated with or endorsed by IMDb.
-  Refreshed automatically via GitHub Actions.
-</footer>
+<div class="main">
+  <!-- Table header (desktop only) -->
+  <div class="vt-header-wrap">
+    <div class="vt-header-scroll" id="headerScroll">
+      <div class="vt-row vt-header" id="vtHeader">
+        <div class="vt-cell c0" data-key="rank">#</div>
+        <div class="vt-cell c1" data-key="episode_title">Episode</div>
+        <div class="vt-cell c2" data-key="series_title">Series</div>
+        <div class="vt-cell c3" data-key="season_number">S/E</div>
+        <div class="vt-cell c4" data-key="rating">Rating</div>
+        <div class="vt-cell c5" data-key="votes">Votes</div>
+        <div class="vt-cell c6" data-key="year">Year</div>
+        <div class="vt-cell c7" data-key="watch_to_here_seconds">Watch&nbsp;Here</div>
+        <div class="vt-cell c8" data-key="total_binge_seconds">Binge</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Virtualized scroll body -->
+  <div class="vt-body" id="vtBody">
+    <div class="status-msg" id="statusMsg"><span class="spinner"></span>Loading episodes&hellip;</div>
+    <div class="vt-spacer" id="vtSpacer">
+      <div class="vt-viewport" id="vtViewport"></div>
+    </div>
+  </div>
+</div>
 
 <script>
-let episodes = [];
-let sortKey = "rating";
-let sortDir = -1;
+/* ── Constants & Helpers ── */
+const OVERSCAN = 15;
+const VOTE_STOPS = [100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000];
+const EXPAND_H = 130; // fixed height for the expanded mobile view
 
-function fmtHours(seconds) {
-  if (!seconds || seconds <= 0) return "\u2014";
-  const h = seconds / 3600;
-  return h.toFixed(1) + " h";
+const isMobile = () => window.innerWidth <= 540;
+const rowHeight = () => isMobile() ? 56 : 40;
+
+function escHtml(s) {
+  if (!s) return "";
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+function fmtHours(sec) {
+  if (!sec || sec <= 0) return "\u2014";
+  return (sec / 3600).toFixed(1) + "\u202Fh";
 }
 
-function render() {
-  const q = document.getElementById("search").value.toLowerCase();
-  const minVotes = parseInt(document.getElementById("minVotes").value, 10);
+/* ── DOM refs ── */
+const vtBody       = document.getElementById("vtBody");
+const vtSpacer     = document.getElementById("vtSpacer");
+const vtViewport   = document.getElementById("vtViewport");
+const headerScroll = document.getElementById("headerScroll");
+const statusMsg    = document.getElementById("statusMsg");
 
-  let rows = episodes.filter(e =>
-    e.votes >= minVotes &&
-    ((e.episode_title || "").toLowerCase().includes(q) ||
-     (e.series_title || "").toLowerCase().includes(q))
-  );
+/* ── State ── */
+let allEpisodes = [];
+let filtered    = [];
+let sortKey     = "rating";
+let sortDir     = -1;
+let lastStart   = -1;
+let lastEnd     = -1;
+let rafPending  = false;
+let expandedIdx = -1;
 
-  rows.sort((a, b) => {
-    let av = a[sortKey], bv = b[sortKey];
-    if (typeof av === "string") { av = av || ""; bv = bv || ""; return sortDir * av.localeCompare(bv); }
-    av = av || 0; bv = bv || 0;
-    return sortDir * (av - bv);
-  });
-
-  const tbody = document.getElementById("epBody");
-  tbody.innerHTML = rows.map((e, i) => `
-    <tr>
-      <td class="rank">${i + 1}</td>
-      <td><img class="poster" src="${e.image_url || ''}" alt="" loading="lazy" onerror="this.style.display='none'"/></td>
-      <td><a href="${e.imdb_url || ('https://www.imdb.com/title/' + e.episode_id + '/')}" target="_blank" rel="noopener">${e.episode_title || "Untitled"}</a></td>
-      <td class="series-title"><a href="${e.series_imdb_url || ('https://www.imdb.com/title/' + e.series_id + '/')}" target="_blank" rel="noopener">${e.series_title || ""}</a></td>
-      <td>S${e.season_number ?? "?"}E${e.episode_number ?? "?"}</td>
-      <td class="rating">${e.rating?.toFixed(1) ?? "\u2014"}</td>
-      <td>${(e.votes || 0).toLocaleString()}</td>
-      <td>${e.year ?? "\u2014"}</td>
-      <td>${fmtHours(e.watch_to_here_seconds)}</td>
-      <td>${fmtHours(e.total_binge_seconds)}</td>
-    </tr>
-  `).join("");
+/* ── Single-Row Expansion Math ── */
+function getRowTop(idx) {
+  const h = rowHeight();
+  if (expandedIdx === -1 || idx <= expandedIdx) return idx * h;
+  return idx * h + EXPAND_H;
 }
 
-document.querySelectorAll("th[data-key]").forEach(th => {
-  th.addEventListener("click", () => {
-    const key = th.dataset.key;
-    if (key === "rank") return;
-    if (sortKey === key) sortDir *= -1;
-    else { sortKey = key; sortDir = key === "rating" ? -1 : -1; }
-    render();
+function getIndexAtScroll(scroll) {
+  const h = rowHeight();
+  if (expandedIdx === -1) return Math.floor(scroll / h);
+  const expandBottom = (expandedIdx + 1) * h + EXPAND_H;
+  if (scroll < (expandedIdx + 1) * h) return Math.floor(scroll / h);
+  if (scroll < expandBottom) return expandedIdx; 
+  return Math.floor((scroll - EXPAND_H) / h);
+}
+
+function toggleExpand(idx) {
+  expandedIdx = (expandedIdx === idx) ? -1 : idx;
+  vtSpacer.style.height = (filtered.length * rowHeight() + (expandedIdx !== -1 ? EXPAND_H : 0)) + "px";
+  lastStart = -1; lastEnd = -1;
+  renderVisible();
+}
+
+/* ── Sorting ── */
+function cmp(a, b) {
+  let av = a[sortKey], bv = b[sortKey];
+  if (sortKey === "season_number") {
+    const sa = a.season_number || 0, sb = b.season_number || 0;
+    if (sa !== sb) return sortDir * (sa - sb);
+    return sortDir * ((a.episode_number || 0) - (b.episode_number || 0));
+  }
+  if (typeof av === "string" || typeof bv === "string") {
+    return sortDir * (av || "").localeCompare(bv || "");
+  }
+  let diff = sortDir * ((av || 0) - (bv || 0));
+  if (diff === 0 && sortKey === "rating") {
+    return sortDir * ((a.votes || 0) - (b.votes || 0));
+  }
+  return diff;
+}
+
+/* ── Filter + sort ── */
+async function refilter() {
+  const minV = VOTE_STOPS[document.getElementById("minVotesSlider").value];
+  const minS = parseFloat(document.getElementById("minScore").value);
+  
+  await ensureDataForFilters(minV, minS);
+
+  const q = document.getElementById("search").value.toLowerCase().trim();
+  const words = q ? q.split(/\s+/).filter(Boolean) : [];
+
+  filtered = allEpisodes.filter(e => {
+    if (e.votes < minV) return false;
+    if (e.rating < minS) return false;
+    if (!words.length) return true;
+    const combined = ((e.episode_title || "") + " " + (e.series_title || "")).toLowerCase();
+    return words.every(w => combined.includes(w));
   });
+  filtered.sort(cmp);
+
+  expandedIdx = -1; // collapse on filter
+  lastStart = -1; lastEnd = -1;
+  vtBody.scrollTop = 0;
+  vtSpacer.style.height = (filtered.length * rowHeight()) + "px";
+  renderVisible();
+  document.getElementById("rowCount").textContent = filtered.length.toLocaleString() + " eps";
+}
+
+/* ── Virtual rendering ── */
+function renderVisible() {
+  const scrollTop  = vtBody.scrollTop;
+  const viewHeight = vtBody.clientHeight;
+  const rh = rowHeight();
+
+  let start = getIndexAtScroll(scrollTop) - OVERSCAN;
+  let end   = getIndexAtScroll(scrollTop + viewHeight) + OVERSCAN;
+  start = Math.max(0, start);
+  end   = Math.min(filtered.length, end);
+
+  if (start === lastStart && end === lastEnd) return;
+  lastStart = start;
+  lastEnd   = end;
+
+  vtViewport.style.transform = "translateY(" + getRowTop(start) + "px)";
+
+  const parts = [];
+  const mobile = isMobile();
+
+  for (let i = start; i < end; i++) {
+    const e = filtered[i];
+    const isExp = (i === expandedIdx);
+    const alt = (i & 1) ? " alt" : "";
+    const epUrl = e.imdb_url || ("https://www.imdb.com/title/" + e.episode_id + "/");
+    const serUrl = e.series_imdb_url || ("https://www.imdb.com/title/" + (e.series_id || "") + "/");
+    const se = `S${e.season_number!=null?e.season_number:"?"}E${e.episode_number!=null?e.episode_number:"?"}`;
+
+    if (mobile) {
+      parts.push(
+        `<div class="vt-row mobile ${alt}" style="height: ${rh}px; line-height: ${rh}px" onclick="toggleExpand(${i})">`,
+          `<div class="vt-cell c0 cell-rank">`, String(i + 1), `</div>`,
+          `<div class="vt-cell mobile-main">`,
+             `<div class="m-series">`, escHtml(e.series_title || ""), `</div>`,
+             `<div class="m-ep"><span class="m-se">${se}</span><span class="m-eptitle">`, escHtml(e.episode_title || "Untitled"), `</span></div>`,
+          `</div>`,
+          `<div class="vt-cell c4 cell-rating">`, (e.rating != null ? e.rating.toFixed(1) : "\u2014"), `</div>`,
+        `</div>`
+      );
+      if (isExp) {
+        parts.push(
+          `<div class="mobile-expand" style="height: ${EXPAND_H}px">`,
+             `<div class="expand-left">`,
+               `<div><strong>Votes:</strong> ${(e.votes != null ? e.votes.toLocaleString() : "\u2014")}</div>`,
+               `<div><strong>Year:</strong> ${(e.year != null ? e.year : "\u2014")}</div>`,
+               `<div><strong>Watch Here:</strong> ${fmtHours(e.watch_to_here_seconds)}</div>`,
+               `<div><strong>Binge:</strong> ${fmtHours(e.total_binge_seconds)}</div>`,
+             `</div>`,
+             `<div class="expand-right">`,
+               `<a class="expand-btn" href="${epUrl}" target="_blank">Episode on IMDb</a>`,
+               `<a class="expand-btn" href="${serUrl}" target="_blank">Series on IMDb</a>`,
+             `</div>`,
+          `</div>`
+        );
+      }
+    } else {
+      parts.push(
+        `<div class="vt-row desktop-only ${alt}" style="height: ${rh}px; line-height: ${rh}px">`,
+          `<div class="vt-cell c0 cell-rank">`, String(i + 1), `</div>`,
+          `<div class="vt-cell c1"><a href="`, epUrl, `" target="_blank" rel="noopener">`, escHtml(e.episode_title || "Untitled"), `</a></div>`,
+          `<div class="vt-cell c2 cell-series"><a href="`, serUrl, `" target="_blank" rel="noopener">`, escHtml(e.series_title || ""), `</a></div>`,
+          `<div class="vt-cell c3 cell-se">`, se, `</div>`,
+          `<div class="vt-cell c4 cell-rating">`, (e.rating != null ? e.rating.toFixed(1) : "\u2014"), `</div>`,
+          `<div class="vt-cell c5 cell-votes">`, (e.votes != null ? e.votes.toLocaleString() : "\u2014"), `</div>`,
+          `<div class="vt-cell c6 cell-year">`, (e.year != null ? e.year : "\u2014"), `</div>`,
+          `<div class="vt-cell c7 cell-hours">`, fmtHours(e.watch_to_here_seconds), `</div>`,
+          `<div class="vt-cell c8 cell-hours">`, fmtHours(e.total_binge_seconds), `</div>`,
+        `</div>`
+      );
+    }
+  }
+  vtViewport.innerHTML = parts.join("");
+}
+
+/* ── Scroll handler ── */
+vtBody.addEventListener("scroll", () => {
+  headerScroll.scrollLeft = vtBody.scrollLeft;
+  if (!rafPending) {
+    rafPending = true;
+    requestAnimationFrame(() => { rafPending = false; renderVisible(); });
+  }
 });
 
-document.getElementById("search").addEventListener("input", render);
-document.getElementById("minVotes").addEventListener("change", render);
-
-fetch("top_episodes.json")
-  .then(r => r.json())
-  .then(data => { episodes = data.episodes || []; render(); })
-  .catch(err => {
-    document.getElementById("epBody").innerHTML =
-      `<tr><td colspan="10">Failed to load data: ${err}</td></tr>`;
+/* ── Sort header clicks ── */
+document.getElementById("vtHeader").addEventListener("click", (ev) => {
+  if (ev.target.classList.contains("rh")) return; 
+  const cell = ev.target.closest("[data-key]");
+  if (!cell) return;
+  const key = cell.dataset.key;
+  if (key === "rank") return;
+  if (sortKey === key) { sortDir *= -1; }
+  else {
+    sortKey = key;
+    sortDir = (key === "episode_title" || key === "series_title") ? 1 : -1;
+  }
+  document.querySelectorAll("#vtHeader .vt-cell").forEach(c => {
+    c.classList.remove("sorted");
+    const arrow = c.querySelector(".arrow");
+    if (arrow) arrow.remove();
   });
-</script>
+  cell.classList.add("sorted");
+  const arrowEl = document.createElement("span");
+  arrowEl.className = "arrow";
+  arrowEl.textContent = sortDir === 1 ? " \u25B2" : " \u25BC";
+  cell.appendChild(arrowEl);
+  refilter();
+});
 
+/* ── Controls Listeners ── */
+let searchTimer;
+document.getElementById("search").addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(refilter, 120);
+});
+
+const votesSlider = document.getElementById("minVotesSlider");
+const votesLabel = document.getElementById("minVotesLabel");
+votesSlider.addEventListener("input", (e) => {
+  const val = VOTE_STOPS[e.target.value];
+  votesLabel.textContent = `Min votes: ${val.toLocaleString()}+`;
+});
+votesSlider.addEventListener("change", refilter);
+document.getElementById("minScore").addEventListener("change", refilter);
+
+/* ── Window resize ── */
+window.addEventListener("resize", () => {
+  expandedIdx = -1; // collapse to avoid height math glitches on resize
+  lastStart = -1; lastEnd = -1;
+  vtSpacer.style.height = (filtered.length * rowHeight()) + "px";
+  renderVisible();
+});
+
+/* ── Column resize (desktop only) ── */
+let customWidths = null;   
+let resizing     = null;   
+
+function applyCustomWidths() {
+  document.documentElement.style.setProperty("--grid-cols", customWidths.map(w => w + "px").join(" "));
+}
+function resetCustomWidths() {
+  customWidths = null;
+  document.documentElement.style.removeProperty("--grid-cols");
+}
+function snapshotWidths() {
+  const cells = document.querySelectorAll("#vtHeader .vt-cell");
+  customWidths = Array.from(cells).map(c => c.getBoundingClientRect().width);
+  applyCustomWidths();
+}
+
+document.querySelectorAll("#vtHeader .vt-cell").forEach((cell, idx) => {
+  const handle = document.createElement("div");
+  handle.className = "rh";
+  handle.addEventListener("mousedown", (e) => {
+    e.preventDefault(); e.stopPropagation();
+    if (!customWidths) snapshotWidths();
+    resizing = { idx, startX: e.clientX, startW: customWidths[idx] };
+    handle.classList.add("active");
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  });
+  handle.addEventListener("dblclick", (e) => {
+    e.stopPropagation();
+    resetCustomWidths();
+    lastStart = -1; lastEnd = -1;
+    renderVisible();
+  });
+  cell.appendChild(handle);
+});
+
+document.addEventListener("mousemove", (e) => {
+  if (!resizing) return;
+  const delta = e.clientX - resizing.startX;
+  customWidths[resizing.idx] = Math.max(36, resizing.startW + delta);
+  applyCustomWidths();
+  lastStart = -1; lastEnd = -1;
+  renderVisible();
+});
+document.addEventListener("mouseup", () => {
+  if (!resizing) return;
+  document.querySelector("#vtHeader .rh.active")?.classList.remove("active");
+  resizing = null;
+  document.body.style.cursor = "";
+  document.body.style.userSelect = "";
+});
+
+/* ── Modal & Theme toggle ── */
+const themeBtn = document.getElementById("themeToggle");
+function updateThemeUI() {
+  const isLight = document.documentElement.classList.contains("light");
+  themeBtn.innerHTML = isLight ? "&#9728;&#65039;" : "&#127769;";
+}
+themeBtn.addEventListener("click", () => {
+  document.documentElement.classList.toggle("light");
+  localStorage.setItem("theme", document.documentElement.classList.contains("light") ? "light" : "dark");
+  updateThemeUI();
+});
+updateThemeUI();
+
+const infoModal = document.getElementById("infoModal");
+document.getElementById("infoBtn").addEventListener("click", () => infoModal.classList.add("open"));
+document.getElementById("closeModal").addEventListener("click", () => infoModal.classList.remove("open"));
+infoModal.addEventListener("click", (e) => { if(e.target === infoModal) infoModal.classList.remove("open") });
+
+/* ── Load data ── */
+const chunkPromises = {};
+const INT_COLS = new Set(["year", "runtime_seconds", "votes", "season_number", "episode_number"]);
+const FLOAT_COLS = new Set(["rating", "total_binge_seconds", "watch_to_here_seconds"]);
+
+function loadChunk(name) {
+  if (chunkPromises[name]) return chunkPromises[name];
+  
+  statusMsg.style.display = "block";
+  statusMsg.innerHTML = '<span class="spinner"></span>Loading more data&hellip;';
+
+  chunkPromises[name] = fetch(`top_episodes_${name}.csv.gz`)
+    .then(res => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.arrayBuffer();
+    })
+    .then(buffer => {
+      const decompressed = fflate.gunzipSync(new Uint8Array(buffer));
+      const csvText = new TextDecoder().decode(decompressed);
+      return new Promise((resolve, reject) => {
+        Papa.parse(csvText, {
+          header: true,
+          skipEmptyLines: true,
+          complete: function(results) {
+            const parsed = results.data.map(row => {
+              const ep = {};
+              for (const [key, val] of Object.entries(row)) {
+                if (val === "") { ep[key] = null; } 
+                else if (INT_COLS.has(key)) { ep[key] = parseInt(val, 10); } 
+                else if (FLOAT_COLS.has(key)) { ep[key] = parseFloat(val); } 
+                else { ep[key] = val; }
+              }
+              ep.imdb_url = "https://www.imdb.com/title/" + ep.episode_id + "/";
+              ep.series_imdb_url = ep.series_id ? "https://www.imdb.com/title/" + ep.series_id + "/" : null;
+              return ep;
+            });
+            allEpisodes.push(...parsed);
+            resolve();
+          },
+          error: function(err) { reject(err); }
+        });
+      });
+    })
+    .catch(err => {
+      statusMsg.className = "status-msg error";
+      statusMsg.textContent = "Failed to load chunk: " + (err.message || err);
+    });
+
+  return chunkPromises[name];
+}
+
+async function ensureDataForFilters(minV, minS) {
+  const promises = [];
+  
+  // 9.0+ chunks
+  promises.push(loadChunk("90_1000"));
+  if (minV < 1000) promises.push(loadChunk("90_100"));
+  
+  // 8.5+ chunks
+  if (minS < 9.0) {
+    promises.push(loadChunk("85_1000"));
+    if (minV < 1000) promises.push(loadChunk("85_100"));
+  }
+  
+  // 8.0+ chunks
+  if (minS < 8.5) {
+    promises.push(loadChunk("80_1000"));
+    if (minV < 1000) promises.push(loadChunk("80_100"));
+  }
+
+  // < 8.0 chunks
+  if (minS < 8.0) {
+    promises.push(loadChunk("0_1000"));
+    if (minV < 1000) promises.push(loadChunk("0_100"));
+  }
+  
+  if (promises.length > 0) {
+    await Promise.all(promises);
+    statusMsg.style.display = "none";
+  }
+}
+
+// Initial Load
+let initMinV = 1000;
+let initMinS = 9.0;
+if (window.innerWidth <= 540) {
+  document.getElementById("minScore").value = "9.5";
+  initMinS = 9.5;
+}
+
+ensureDataForFilters(initMinV, initMinS).then(() => {
+  const ratingCol = document.querySelector('#vtHeader [data-key="rating"]');
+  if (ratingCol) {
+    ratingCol.classList.add("sorted");
+    const arrow = document.createElement("span");
+    arrow.className = "arrow";
+    arrow.textContent = " \u25BC";
+    ratingCol.appendChild(arrow);
+  }
+  refilter();
+});
+</script>
 </body>
 </html>
