@@ -1,5 +1,5 @@
 """
-Absolute Cinema TV Episodes - data builder.
+TopEpisode.com - data builder.
 
 Outputs a CSV file (sorted by episode_id for stable diffs) containing the top-
 rated TV episodes by IMDb user rating.

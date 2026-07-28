@@ -3,8 +3,37 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Absolute Cinema TV Episodes</title>
-<meta name="description" content="Top-rated TV episodes according to IMDb — sortable, filterable, auto-updated daily." />
+<title>TopEpisode.com — Best TV Episodes of All Time (IMDb Rankings)</title>
+<meta name="description" content="Discover the highest-rated TV episodes of all time based on IMDb user rankings. Sort by rating, votes, year, and binge time. Filterable, updated daily." />
+<link rel="canonical" href="https://www.topepisode.com" />
+<meta name="robots" content="index, follow" />
+<meta name="theme-color" content="#0e0f11" />
+<!-- Open Graph -->
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="TopEpisode.com" />
+<meta property="og:title" content="TopEpisode.com — Best TV Episodes of All Time" />
+<meta property="og:description" content="Sort, filter, and explore the top-rated TV episodes ever made — according to IMDb data, auto-updated daily. Absolute cinema." />
+<meta property="og:url" content="https://www.topepisode.com" />
+<meta property="og:image" content="https://www.topepisode.com/og-image.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:locale" content="en_US" />
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="TopEpisode.com — Best TV Episodes of All Time" />
+<meta name="twitter:description" content="Sort, filter, and explore the top-rated TV episodes ever made — according to IMDb data, auto-updated daily. Absolute cinema." />
+<meta name="twitter:image" content="https://www.topepisode.com/og-image.png" />
+<!-- Structured Data -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "WebSite",
+  "name": "TopEpisode.com",
+  "url": "https://www.topepisode.com",
+  "description": "Discover the highest-rated TV episodes of all time based on IMDb user rankings. Sort by rating, votes, year, and binge time. Filterable, updated daily."
+}
+</script>
+<link rel="icon" href="/favicon.png" type="image/png" />
 <script>if(localStorage.getItem('theme')==='light')document.documentElement.classList.add('light')</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <script src="https://unpkg.com/fflate@0.8.2/umd/index.js"></script>
@@ -108,6 +137,8 @@
     padding: 0 2px;
     white-space: nowrap;
     margin-left: auto;
+    min-width: 90px;
+    text-align: right;
   }
   
   .icon-btn {
@@ -377,8 +408,8 @@
 <body>
 
 <header>
-  <h1>Absolute <span>Cinema</span> TV Episodes</h1>
-  <p>Top episodes of TV according to IMDb &mdash; sortable, filterable, auto-updated daily</p>
+  <h1>Top<span>Episode</span>.com</h1>
+  <p>Top episodes of TV based on IMDb rankings &mdash; sortable, filterable, auto-updated daily. <span style="font-style:italic">Absolute cinema.</span></p>
   <div class="hint-text desktop-hint">Column widths are adjustable by dragging between columns</div>
   <div class="hint-text mobile-hint">Tap an episode for details</div>
 </header>
@@ -409,7 +440,7 @@
 <div class="modal-overlay" id="infoModal">
   <div class="modal">
     <button class="modal-close" id="closeModal">&times;</button>
-    <h2>Absolute Cinema TV Episodes</h2>
+    <h2>TopEpisode.com</h2>
     <p>Data sourced from IMDb non-commercial datasets. Not affiliated with or endorsed by IMDb.<br>
     Refreshed automatically via GitHub Actions.</p>
     <p>Made by <a href="https://github.com/kocijan" target="_blank">Martin Josip Kocijan</a>.</p>

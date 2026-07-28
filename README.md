@@ -1,6 +1,6 @@
-# Absolute Cinema TV Episodes
+# TopEpisode.com
 
-> Top episodes of TV according to IMDb — sortable, filterable, self-updating.
+> Top episodes of TV based on IMDb rankings — sortable, filterable, auto-updated daily. Absolute cinema.
 
 Inspired by the IMDb search feature at
 https://www.imdb.com/search/title/?title_type=tv_episode&num_votes=1000,&sort=user_rating,desc
@@ -44,7 +44,7 @@ file):
 | Variable      | Default                  | Meaning                              |
 |---------------|---------------------------|---------------------------------------|
 | `MIN_VOTES`   | `100`                     | Minimum IMDb vote count to qualify    |
-| `TOP_N`       | `40000`                   | How many top episodes to keep         |
+| `TOP_N`       | `100000`                  | How many top episodes to keep         |
 | `OUTPUT_PATH` | `data/top_episodes.csv`  | Base path for resulting CSV chunks     |
 
 ## Disclaimer

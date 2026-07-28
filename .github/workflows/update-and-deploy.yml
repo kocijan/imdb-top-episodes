@@ -28,7 +28,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt "Pillow>=10.0.0"
 
       - name: Build top episodes CSV
         env:
@@ -44,6 +44,9 @@ jobs:
           for f in data/top_episodes_*.csv; do
             gzip -c "$f" > "site/$(basename "$f").gz"
           done
+
+      - name: Generate OG image
+        run: python generate_og_image.py
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

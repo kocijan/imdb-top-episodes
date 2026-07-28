@@ -4,11 +4,12 @@
 # dependencies = [
 #     "requests>=2.31.0",
 #     "pandas>=2.0.0",
+#     "Pillow>=10.0.0",
 # ]
 # ///
 
 """
-Local Build Script for Absolute Cinema TV Episodes
+Local Build Script for TopEpisode.com
 Replicates the data fetching and chunking logic of the GitHub Actions workflow,
 and compresses the output chunks. Uses `uv` to automatically manage dependencies.
 """
@@ -48,6 +49,12 @@ def main():
         with open(f, 'rb') as f_in:
             with gzip.open(out_path, 'wb') as f_out:
                 shutil.copyfileobj(f_in, f_out)
+
+    print("\n=== Generating OG Image ===")
+    try:
+        subprocess.run([sys.executable, "generate_og_image.py"], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Warning: OG image generation failed (exit code {e.returncode}), continuing...")
                 
     print("\n=== Done ===")
     print("Data successfully built. You can test the site locally by running:")
