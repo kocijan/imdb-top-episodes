@@ -35,8 +35,6 @@
 </script>
 <link rel="icon" href="/favicon.png" type="image/png" />
 <script>if(localStorage.getItem('theme')==='light')document.documentElement.classList.add('light')</script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-<script src="https://unpkg.com/fflate@0.8.2/umd/index.js"></script>
 <style>
   /* ── Theme: Dark (default) ── */
   :root {
@@ -49,7 +47,7 @@
     --row-hover: #1c1d20;
     --row-alt: rgba(255,255,255,0.018);
     --row-alt: rgba(255,255,255,0.018);
-    --grid-cols: 64px minmax(140px,3fr) minmax(110px,2fr) 76px 78px 92px 64px 104px 90px;
+    --grid-cols: 64px minmax(140px,3fr) minmax(110px,2fr) 76px 78px 92px 64px 116px 90px;
   }
   /* ── Theme: Light ── */
   :root.light {
@@ -415,14 +413,14 @@
 </header>
 
 <div class="controls">
-  <input type="text" id="search" placeholder="Filter by title..." />
+  <input type="text" id="search" placeholder="Filter by title..." aria-label="Search by title" />
   
   <div class="control-group">
     <input type="range" id="minVotesSlider" min="0" max="8" step="1" value="3">
-    <span class="slider-label" id="minVotesLabel">Min votes: 1,000+</span>
+    <label for="minVotesSlider" class="slider-label" id="minVotesLabel">Min votes: 1,000+</label>
   </div>
 
-  <select id="minScore">
+  <select id="minScore" aria-label="Minimum Score">
     <option value="0">Min score: any</option>
     <option value="8.0">Min score: 8.0+</option>
     <option value="8.5">Min score: 8.5+</option>
@@ -448,7 +446,7 @@
   </div>
 </div>
 
-<div class="main">
+<main class="main">
   <!-- Table header (desktop only) -->
   <div class="vt-header-wrap">
     <div class="vt-header-scroll" id="headerScroll">
@@ -473,10 +471,11 @@
       <div class="vt-viewport" id="vtViewport"></div>
     </div>
   </div>
-</div>
+</main>
 
 <script>
 /* ── Constants & Helpers ── */
+const INITIAL_DATA = /* DATA_START */ null /* DATA_END */;
 const OVERSCAN = 15;
 const VOTE_STOPS = [100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000];
 const EXPAND_H = 130; // fixed height for the expanded mobile view
@@ -536,6 +535,23 @@ function toggleExpand(idx) {
 /* ── Sorting ── */
 function cmp(a, b) {
   let av = a[sortKey], bv = b[sortKey];
+
+  // Missing values for these columns always go to the bottom
+  const checkMissing = (sortKey === "watch_to_here_seconds" || sortKey === "total_binge_seconds" || sortKey === "year" || sortKey === "season_number");
+  if (checkMissing) {
+    const isMissing = (v) => {
+      if (sortKey === "watch_to_here_seconds" || sortKey === "total_binge_seconds") {
+        return !v || v <= 0 || v === "—" || v === "\u2014";
+      }
+      return v == null || v === "" || v === "—" || v === "\u2014" || (typeof v === "number" && isNaN(v));
+    };
+    const aMissing = isMissing(av);
+    const bMissing = isMissing(bv);
+    if (aMissing && !bMissing) return 1;
+    if (!aMissing && bMissing) return -1;
+    if (aMissing && bMissing) return 0;
+  }
+
   if (sortKey === "season_number") {
     const sa = a.season_number || 0, sb = b.season_number || 0;
     if (sa !== sb) return sortDir * (sa - sb);
@@ -552,12 +568,7 @@ function cmp(a, b) {
 }
 
 /* ── Filter + sort ── */
-async function refilter() {
-  const minV = VOTE_STOPS[document.getElementById("minVotesSlider").value];
-  const minS = parseFloat(document.getElementById("minScore").value);
-  
-  await ensureDataForFilters(minV, minS);
-
+function applyFiltersAndRender(minV, minS) {
   const q = document.getElementById("search").value.toLowerCase().trim();
   const words = q ? q.split(/\s+/).filter(Boolean) : [];
 
@@ -576,6 +587,15 @@ async function refilter() {
   vtSpacer.style.height = (filtered.length * rowHeight()) + "px";
   renderVisible();
   document.getElementById("rowCount").textContent = filtered.length.toLocaleString() + " eps";
+}
+
+async function refilter(silent = false) {
+  const minV = VOTE_STOPS[document.getElementById("minVotesSlider").value];
+  const minS = parseFloat(document.getElementById("minScore").value);
+  
+  document.getElementById("rowCount").textContent = "Loading eps...";
+  await ensureDataForFilters(minV, minS, silent);
+  applyFiltersAndRender(minV, minS);
 }
 
 /* ── Virtual rendering ── */
@@ -786,11 +806,13 @@ const chunkPromises = {};
 const INT_COLS = new Set(["year", "runtime_seconds", "votes", "season_number", "episode_number"]);
 const FLOAT_COLS = new Set(["rating", "total_binge_seconds", "watch_to_here_seconds"]);
 
-function loadChunk(name) {
+function loadChunk(name, silent = false) {
   if (chunkPromises[name]) return chunkPromises[name];
   
-  statusMsg.style.display = "block";
-  statusMsg.innerHTML = '<span class="spinner"></span>Loading more data&hellip;';
+  if (!silent) {
+    statusMsg.style.display = "block";
+    statusMsg.innerHTML = '<span class="spinner"></span>Loading more data&hellip;';
+  }
 
   chunkPromises[name] = fetch(`top_episodes_${name}.csv.gz`)
     .then(res => {
@@ -817,7 +839,9 @@ function loadChunk(name) {
               ep.series_imdb_url = ep.series_id ? "https://www.imdb.com/title/" + ep.series_id + "/" : null;
               return ep;
             });
-            allEpisodes.push(...parsed);
+            const existing = new Set(allEpisodes.map(e => e.episode_id));
+            const newEps = parsed.filter(e => !existing.has(e.episode_id));
+            allEpisodes.push(...newEps);
             resolve();
           },
           error: function(err) { reject(err); }
@@ -825,6 +849,7 @@ function loadChunk(name) {
       });
     })
     .catch(err => {
+      statusMsg.style.display = "block";
       statusMsg.className = "status-msg error";
       statusMsg.textContent = "Failed to load chunk: " + (err.message || err);
     });
@@ -832,29 +857,58 @@ function loadChunk(name) {
   return chunkPromises[name];
 }
 
-async function ensureDataForFilters(minV, minS) {
+async function loadDependencies() {
+  if (window.Papa && window.fflate) return;
+  if (window._depsLoading) return window._depsLoading;
+  window._depsLoading = Promise.all([
+    new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = "https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js";
+      s.onload = resolve; s.onerror = reject;
+      document.head.appendChild(s);
+    }),
+    new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = "https://unpkg.com/fflate@0.8.2/umd/index.js";
+      s.onload = resolve; s.onerror = reject;
+      document.head.appendChild(s);
+    })
+  ]);
+  return window._depsLoading;
+}
+
+async function ensureDataForFilters(minV, minS, silent = false) {
+  try {
+    await loadDependencies();
+  } catch(e) {
+    statusMsg.style.display = "block";
+    statusMsg.className = "status-msg error";
+    statusMsg.textContent = "Failed to load dependencies. Check your connection.";
+    return;
+  }
+
   const promises = [];
   
   // 9.0+ chunks
-  promises.push(loadChunk("90_1000"));
-  if (minV < 1000) promises.push(loadChunk("90_100"));
+  promises.push(loadChunk("90_1000", silent));
+  if (minV < 1000) promises.push(loadChunk("90_100", silent));
   
   // 8.5+ chunks
   if (minS < 9.0) {
-    promises.push(loadChunk("85_1000"));
-    if (minV < 1000) promises.push(loadChunk("85_100"));
+    promises.push(loadChunk("85_1000", silent));
+    if (minV < 1000) promises.push(loadChunk("85_100", silent));
   }
   
   // 8.0+ chunks
   if (minS < 8.5) {
-    promises.push(loadChunk("80_1000"));
-    if (minV < 1000) promises.push(loadChunk("80_100"));
+    promises.push(loadChunk("80_1000", silent));
+    if (minV < 1000) promises.push(loadChunk("80_100", silent));
   }
 
   // < 8.0 chunks
   if (minS < 8.0) {
-    promises.push(loadChunk("0_1000"));
-    if (minV < 1000) promises.push(loadChunk("0_100"));
+    promises.push(loadChunk("0_1000", silent));
+    if (minV < 1000) promises.push(loadChunk("0_100", silent));
   }
   
   if (promises.length > 0) {
@@ -871,16 +925,72 @@ if (window.innerWidth <= 540) {
   initMinS = 9.5;
 }
 
-ensureDataForFilters(initMinV, initMinS).then(() => {
+function initUI(silent = false) {
   const ratingCol = document.querySelector('#vtHeader [data-key="rating"]');
-  if (ratingCol) {
+  if (ratingCol && !ratingCol.classList.contains("sorted")) {
     ratingCol.classList.add("sorted");
     const arrow = document.createElement("span");
     arrow.className = "arrow";
     arrow.textContent = " \u25BC";
     ratingCol.appendChild(arrow);
   }
-  refilter();
+  refilter(silent);
+}
+
+if (INITIAL_DATA) {
+  statusMsg.style.display = "none";
+  allEpisodes.push(...INITIAL_DATA);
+  
+  const ratingCol = document.querySelector('#vtHeader [data-key="rating"]');
+  if (ratingCol && !ratingCol.classList.contains("sorted")) {
+    ratingCol.classList.add("sorted");
+    const arrow = document.createElement("span");
+    arrow.className = "arrow";
+    arrow.textContent = " \u25BC";
+    ratingCol.appendChild(arrow);
+  }
+  
+  const minV = VOTE_STOPS[document.getElementById("minVotesSlider").value];
+  const minS = parseFloat(document.getElementById("minScore").value);
+  applyFiltersAndRender(minV, minS);
+  document.getElementById("rowCount").textContent = "Loading eps...";
+} else {
+  // If no embedded data, we MUST show the spinner initially
+  statusMsg.style.display = "block";
+}
+
+/* ── Global Scrolling ── */
+window.addEventListener("wheel", (e) => {
+  if (infoModal.classList.contains("open")) return;
+  if (!e.target.closest("#vtBody")) {
+    vtBody.scrollTop += e.deltaY;
+  }
+}, { passive: true });
+
+window.addEventListener("keydown", (e) => {
+  if (infoModal.classList.contains("open")) return;
+  const ae = document.activeElement;
+  if (ae && (ae.tagName === "INPUT" || ae.tagName === "SELECT" || ae.tagName === "BUTTON")) return;
+  
+  const page = vtBody.clientHeight * 0.9;
+  const line = 40;
+  
+  switch(e.key) {
+    case "PageDown": vtBody.scrollTop += page; e.preventDefault(); break;
+    case "PageUp": vtBody.scrollTop -= page; e.preventDefault(); break;
+    case "ArrowDown": vtBody.scrollTop += line; e.preventDefault(); break;
+    case "ArrowUp": vtBody.scrollTop -= line; e.preventDefault(); break;
+    case "Home": vtBody.scrollTop = 0; e.preventDefault(); break;
+    case "End": vtBody.scrollTop = vtBody.scrollHeight; e.preventDefault(); break;
+    case " ": 
+      vtBody.scrollTop += e.shiftKey ? -page : page;
+      e.preventDefault();
+      break;
+  }
+});
+
+ensureDataForFilters(initMinV, initMinS, !!INITIAL_DATA).then(() => {
+  initUI(!!INITIAL_DATA);
 });
 </script>
 </body>

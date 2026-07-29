@@ -25,6 +25,7 @@ For each qualifying episode we also compute:
 
 Output: data/top_episodes.csv
 """
+import argparse
 import csv
 import gzip
 import io
@@ -33,6 +34,7 @@ import os
 import sys
 import time
 from datetime import datetime, timezone
+import re
 
 import requests
 
@@ -200,29 +202,58 @@ def fetch_series_runtimes_via_graphql(series_id: str):
     return all_eps
 
 
-def download_tsv(name: str):
+def download_tsv(name: str, use_cache=False, keep_cache=False):
+    """Download an IMDb TSV dataset, with optional local caching.
+
+    Args:
+        name: Filename like 'title.basics.tsv.gz'.
+        use_cache: If True, use a previously cached file instead of re-downloading.
+        keep_cache: If True, save the download to data/cache/ for future use.
+    """
     import pandas as pd
+
+    cache_dir = os.path.join("data", "cache")
+    cache_path = os.path.join(cache_dir, name)
+
+    if use_cache and os.path.isfile(cache_path):
+        print(f"[fallback] Using cached {cache_path}", file=sys.stderr)
+        with gzip.open(cache_path, "rt", encoding="utf-8") as gz:
+            df = pd.read_csv(gz, sep="\t", low_memory=False, na_values=["\\N"])
+        return df
 
     url = f"{DATASETS_BASE}/{name}"
     print(f"[fallback] Downloading {url} ...", file=sys.stderr)
     resp = requests.get(url, timeout=180)
     resp.raise_for_status()
-    with gzip.GzipFile(fileobj=io.BytesIO(resp.content)) as gz:
+    raw = resp.content
+
+    if keep_cache:
+        os.makedirs(cache_dir, exist_ok=True)
+        with open(cache_path, "wb") as f:
+            f.write(raw)
+        print(f"[fallback] Cached to {cache_path}", file=sys.stderr)
+
+    with gzip.GzipFile(fileobj=io.BytesIO(raw)) as gz:
         df = pd.read_csv(gz, sep="\t", low_memory=False, na_values=["\\N"])
     return df
 
 
-def fetch_via_dataset_fallback(min_votes: int, top_n: int):
+def fetch_via_dataset_fallback(min_votes: int, top_n: int, use_cache=False, keep_cache=False):
     """Fallback path using IMDb's official non-commercial dataset dumps.
-    Used only if the GraphQL API is unavailable."""
+    Used only if the GraphQL API is unavailable.
+
+    Returns:
+        (episodes_list, basics_df, episode_df): the top episodes as dicts,
+        plus the raw DataFrames needed for binge-time computation.
+    """
     import pandas as pd
 
-    basics = download_tsv("title.basics.tsv.gz")
-    ratings = download_tsv("title.ratings.tsv.gz")
-    episode = download_tsv("title.episode.tsv.gz")
+    basics = download_tsv("title.basics.tsv.gz", use_cache=use_cache, keep_cache=keep_cache)
+    ratings = download_tsv("title.ratings.tsv.gz", use_cache=use_cache, keep_cache=keep_cache)
+    episode_df = download_tsv("title.episode.tsv.gz", use_cache=use_cache, keep_cache=keep_cache)
 
     episodes = basics[basics["titleType"] == "tvEpisode"].copy()
-    episodes = episodes.merge(episode, on="tconst", how="inner")
+    episodes = episodes.merge(episode_df, on="tconst", how="inner")
     episodes = episodes.merge(ratings, on="tconst", how="inner")
     episodes["numVotes"] = pd.to_numeric(episodes["numVotes"], errors="coerce")
     episodes = episodes[episodes["numVotes"] >= min_votes]
@@ -255,7 +286,7 @@ def fetch_via_dataset_fallback(min_votes: int, top_n: int):
                 "episode_number": int(row["episodeNumber"]) if pd.notna(row.get("episodeNumber")) else None,
             }
         )
-    return results
+    return results, basics, episode_df
 
 
 def compute_binge_times(episodes):
@@ -318,8 +349,103 @@ CSV_FIELDS = [
 ]
 
 
+def compute_binge_times_from_datasets(episodes, basics_df, episode_df):
+    """Compute total_binge_seconds and watch_to_here_seconds for every
+    episode using the already-loaded IMDb dataset DataFrames.
+
+    This is the dataset-fallback equivalent of compute_binge_times() which
+    uses GraphQL. The data needed is already in basics (runtimeMinutes) and
+    episode_df (parentTconst, seasonNumber, episodeNumber).
+    """
+    import pandas as pd
+
+    series_ids = sorted({e["series_id"] for e in episodes if e.get("series_id")})
+    if not series_ids:
+        for ep in episodes:
+            ep["total_binge_seconds"] = None
+            ep["watch_to_here_seconds"] = None
+        return episodes
+
+    print(f"  Computing binge times for {len(series_ids)} unique series...", file=sys.stderr)
+
+    # Get all episodes belonging to the relevant series
+    sibling_eps = episode_df[episode_df["parentTconst"].isin(series_ids)].copy()
+    # Join with basics to get runtimes
+    sibling_eps = sibling_eps.merge(
+        basics_df[["tconst", "runtimeMinutes"]],
+        on="tconst",
+        how="left",
+    )
+    sibling_eps["runtimeMinutes"] = pd.to_numeric(sibling_eps["runtimeMinutes"], errors="coerce")
+    sibling_eps["runtime_sec"] = sibling_eps["runtimeMinutes"] * 60
+    sibling_eps["seasonNumber"] = pd.to_numeric(sibling_eps["seasonNumber"], errors="coerce")
+    sibling_eps["episodeNumber"] = pd.to_numeric(sibling_eps["episodeNumber"], errors="coerce")
+
+    # Pre-compute per-series data: total binge and ordered episode list
+    series_cache = {}
+    for sid in series_ids:
+        ser_eps = sibling_eps[sibling_eps["parentTconst"] == sid].copy()
+        runtimes = ser_eps["runtime_sec"].dropna()
+        avg_runtime = runtimes.mean() if len(runtimes) > 0 else 0
+
+        # Fill missing runtimes with average
+        ser_eps["runtime_filled"] = ser_eps["runtime_sec"].fillna(avg_runtime)
+
+        total_binge = ser_eps["runtime_filled"].sum()
+
+        # Sort by season, episode for watch_to_here
+        ser_eps = ser_eps.sort_values(
+            ["seasonNumber", "episodeNumber"],
+            ascending=[True, True],
+            na_position="last",
+        )
+        ser_eps["cumulative"] = ser_eps["runtime_filled"].cumsum()
+
+        # Build lookup: episode_id -> cumulative runtime
+        watch_lookup = dict(zip(ser_eps["tconst"], ser_eps["cumulative"]))
+
+        series_cache[sid] = {
+            "total_binge": float(total_binge),
+            "watch_lookup": watch_lookup,
+        }
+
+    # Apply to each episode
+    for ep in episodes:
+        sid = ep.get("series_id")
+        cache = series_cache.get(sid)
+        if not cache:
+            ep["total_binge_seconds"] = None
+            ep["watch_to_here_seconds"] = None
+            continue
+
+        ep["total_binge_seconds"] = cache["total_binge"]
+        wth = cache["watch_lookup"].get(ep["episode_id"])
+        ep["watch_to_here_seconds"] = float(wth) if wth is not None else ep.get("runtime_seconds")
+
+    return episodes
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="TopEpisode.com data builder")
+    parser.add_argument(
+        "--keep-cache",
+        action="store_true",
+        help="Save downloaded IMDb dataset files to data/cache/ for future use",
+    )
+    parser.add_argument(
+        "--use-cache",
+        action="store_true",
+        help="Use previously cached IMDb dataset files instead of re-downloading",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
     used_fallback = False
+    basics_df = None
+    episode_df = None
+
     try:
         print(f"Fetching top {TOP_N} episodes (min {MIN_VOTES} votes) via GraphQL...", file=sys.stderr)
         episodes = fetch_top_episodes_via_graphql(MIN_VOTES, TOP_N)
@@ -328,7 +454,11 @@ def main():
     except Exception as e:
         print(f"GraphQL primary path failed: {e}", file=sys.stderr)
         print("Falling back to IMDb non-commercial dataset dumps...", file=sys.stderr)
-        episodes = fetch_via_dataset_fallback(MIN_VOTES, TOP_N)
+        episodes, basics_df, episode_df = fetch_via_dataset_fallback(
+            MIN_VOTES, TOP_N,
+            use_cache=args.use_cache,
+            keep_cache=args.keep_cache,
+        )
         used_fallback = True
 
     if not episodes:
@@ -336,7 +466,9 @@ def main():
         sys.exit(1)
 
     print(f"Computing binge-watch times for {len(episodes)} episodes...", file=sys.stderr)
-    if not used_fallback:
+    if used_fallback and basics_df is not None and episode_df is not None:
+        episodes = compute_binge_times_from_datasets(episodes, basics_df, episode_df)
+    elif not used_fallback:
         episodes = compute_binge_times(episodes)
     else:
         for ep in episodes:
@@ -384,6 +516,36 @@ def main():
             for ep in chunk_eps:
                 writer.writerow(ep.get(field, "") if ep.get(field) is not None else "" for field in CSV_FIELDS)
         print(f"Wrote {len(chunk_eps)} episodes to {chunk_path}", file=sys.stderr)
+
+    # Inject top 100 episodes into index.html for instant rendering
+    top_100_chunk = list(chunks.get("90_1000", []))
+    # Sort by Rating (desc), then Votes (desc)
+    top_100_chunk.sort(key=lambda e: (e.get("rating") or 0.0, e.get("votes") or 0), reverse=True)
+    top_100 = top_100_chunk[:100]
+    
+    template_path = os.path.join(out_dir, "..", "site", "template.html")
+    index_path = os.path.join(out_dir, "..", "site", "index.html")
+    if os.path.exists(template_path):
+        with open(template_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        json_data = json.dumps(top_100, separators=(',', ':'))
+        content = re.sub(
+            r"/\* DATA_START \*/.*?/\* DATA_END \*/",
+            lambda m: f"/* DATA_START */ {json_data} /* DATA_END */",
+            content,
+            flags=re.DOTALL
+        )
+        with open(index_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        print(f"Generated {index_path} from template", file=sys.stderr)
+
+    # Clean up cache if not keeping it
+    if not args.keep_cache:
+        cache_dir = os.path.join("data", "cache")
+        if os.path.isdir(cache_dir):
+            import shutil
+            shutil.rmtree(cache_dir)
+            print(f"Cleaned up cache directory {cache_dir}", file=sys.stderr)
 
 
 if __name__ == "__main__":
